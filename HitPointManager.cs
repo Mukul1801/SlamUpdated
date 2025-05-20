@@ -19,6 +19,9 @@ public class HitPointManager : MonoBehaviour
     private ARRaycastManager raycastManager;
     private ARPlaneManager arPlaneManager;
     private ARPointCloudManager arPointCloudManager;
+    
+    // Reference to NavigationEnhancer
+    private NavigationEnhancer navigationEnhancer;
 
     // UI references
     public GameObject textRefs;
@@ -126,8 +129,16 @@ public class HitPointManager : MonoBehaviour
         // Setup Navigation Manager
         navigationManager = GetComponent<NavigationManager>();
         if (navigationManager == null)
-            navigationManager = gameObject.AddComponent<NavigationManager>();
-        navigationManager.hitPointManager = this;
+            navigationManager = FindObjectOfType<NavigationManager>();
+        
+        // Setup NavigationEnhancer
+        navigationEnhancer = GetComponent<NavigationEnhancer>();
+        if (navigationEnhancer == null)
+            navigationEnhancer = FindObjectOfType<NavigationEnhancer>();
+            
+        // Connect NavigationEnhancer to this HitPointManager
+        if (navigationEnhancer != null)
+            navigationEnhancer.hitPointManager = this;
 
         // Setup Environment Scan Manager
         environmentScanManager = GetComponent<EnvironmentScanManager>();
@@ -160,7 +171,7 @@ public class HitPointManager : MonoBehaviour
             scanEnvironmentButton.onClick.AddListener(SwitchToEnvironmentScanningMode);
     }
 
-    private void PopulateSavedLocations()
+    public void PopulateSavedLocations()
     {
         // Clear any existing buttons
         foreach (Transform child in savedLocationPrefabHolder.transform)
@@ -168,23 +179,43 @@ public class HitPointManager : MonoBehaviour
             Destroy(child.gameObject);
         }
 
-        // Add buttons for each saved file
-        string[] files = Directory.GetFiles(GetAndroidExternalStoragePath() + "/ARCoreTrackables", "*.csv");
-        foreach (string file in files)
+        // Check for JSON files first (enhanced maps)
+        string[] jsonFiles = Directory.GetFiles(GetAndroidExternalStoragePath() + "/ARCoreTrackables", "*.json");
+        
+        // If no JSON files, fall back to regular CSV files
+        if (jsonFiles.Length == 0)
         {
-            GameObject go = Instantiate(savedLocationButtonPrefab);
-            go.transform.SetParent(savedLocationPrefabHolder.transform);
-            go.transform.localScale = new Vector3(1, 1, 1);
-            go.SetActive(true);
-
-            string fileName = Path.GetFileName(file);
-            go.transform.GetChild(0).GetComponent<TextMeshProUGUI>().text = fileName;
-
-            // Add click listener
-            Button button = go.GetComponent<Button>();
-            string fileNameCopy = fileName; // Create a copy for the closure
-            button.onClick.AddListener(() => LoadPathFromFile(fileNameCopy));
+            // Add buttons for each saved CSV file
+            string[] files = Directory.GetFiles(GetAndroidExternalStoragePath() + "/ARCoreTrackables", "*.csv");
+            foreach (string file in files)
+            {
+                CreateSavedLocationButton(file);
+            }
         }
+        else
+        {
+            // Add buttons for JSON files (enhanced maps)
+            foreach (string file in jsonFiles)
+            {
+                CreateSavedLocationButton(file);
+            }
+        }
+    }
+    
+    private void CreateSavedLocationButton(string file)
+    {
+        GameObject go = Instantiate(savedLocationButtonPrefab);
+        go.transform.SetParent(savedLocationPrefabHolder.transform);
+        go.transform.localScale = new Vector3(1, 1, 1);
+        go.SetActive(true);
+
+        string fileName = Path.GetFileName(file);
+        go.transform.GetChild(0).GetComponent<TextMeshProUGUI>().text = fileName;
+
+        // Add click listener
+        Button button = go.GetComponent<Button>();
+        string fileNameCopy = fileName; // Create a copy for the closure
+        button.onClick.AddListener(() => LoadPathFromFile(fileNameCopy));
     }
 
     #endregion
@@ -391,6 +422,12 @@ public class HitPointManager : MonoBehaviour
             navigationManager.textToSpeech.Speak("Automatic path creation mode activated. Please move slowly around your environment.");
 
         textRefs.GetComponent<TextMeshProUGUI>().text = "Creating path automatically. Please move slowly.\n";
+
+        // If NavigationEnhancer is available, start a new map
+        if (navigationEnhancer != null)
+        {
+            navigationEnhancer.StartNewMap();
+        }
     }
 
     public void SwitchToManualPathCreationMode()
@@ -411,6 +448,12 @@ public class HitPointManager : MonoBehaviour
             navigationManager.textToSpeech.Speak("Manual path creation mode activated. Tap to place path points. Double tap on points to change their type.");
 
         textRefs.GetComponent<TextMeshProUGUI>().text = "Creating path manually. Tap to place points.\n";
+
+        // If NavigationEnhancer is available, start a new map
+        if (navigationEnhancer != null)
+        {
+            navigationEnhancer.StartNewMap();
+        }
     }
 
     public void SwitchToEnvironmentScanningMode()
@@ -435,6 +478,12 @@ public class HitPointManager : MonoBehaviour
             navigationManager.textToSpeech.Speak("Environment scanning mode activated. Please move around to map your surroundings.");
 
         textRefs.GetComponent<TextMeshProUGUI>().text = "Scanning environment. Move around to map more area.\n";
+
+        // If NavigationEnhancer is available, use it for enhanced scanning
+        if (navigationEnhancer != null)
+        {
+            navigationEnhancer.StartNewMap();
+        }
     }
 
     public void StartNavigationMode()
@@ -471,7 +520,7 @@ public class HitPointManager : MonoBehaviour
 
     #region Waypoint Management
 
-    private void AddNewWaypoint(Vector3 position, Quaternion rotation, WaypointType type)
+    public void AddNewWaypoint(Vector3 position, Quaternion rotation, WaypointType type)
     {
         // Create a unique ID for the waypoint
         string waypointId = Guid.NewGuid().ToString();
@@ -490,7 +539,7 @@ public class HitPointManager : MonoBehaviour
         CreateWaypointVisual(poseClassList.Count - 1);
     }
 
-    private void CreateWaypointVisual(int poseIndex)
+    public void CreateWaypointVisual(int poseIndex)
     {
         if (poseIndex < 0 || poseIndex >= poseClassList.Count)
             return;
@@ -534,7 +583,7 @@ public class HitPointManager : MonoBehaviour
         }
     }
 
-    private void UpdateWaypointVisual(int poseIndex)
+    public void UpdateWaypointVisual(int poseIndex)
     {
         if (poseIndex < 0 || poseIndex >= poseClassList.Count)
             return;
@@ -587,7 +636,7 @@ public class HitPointManager : MonoBehaviour
         }
     }
 
-    private void ClearCurrentWaypoints()
+    public void ClearCurrentWaypoints()
     {
         // Destroy all waypoint objects
         foreach (GameObject waypoint in instantiatedWaypoints)
@@ -797,6 +846,14 @@ public class HitPointManager : MonoBehaviour
     {
         Debug.Log("SaveAllTheInformationToFile called with filename: " + filename);
 
+        // If NavigationEnhancer is available, use enhanced map saving
+        if (navigationEnhancer != null)
+        {
+            navigationEnhancer.SaveEnhancedMap(filename);
+            return;
+        }
+
+        // Legacy saving method
         if (string.IsNullOrEmpty(filename))
         {
             filename = DateTime.Now.ToString("yyyyMMdd_HHmmss");
@@ -927,6 +984,16 @@ public class HitPointManager : MonoBehaviour
 
     public void LoadPathFromFile(string filename)
     {
+        // If NavigationEnhancer is available and the file is a JSON, use enhanced loading
+        string jsonPath = Path.Combine(GetAndroidExternalStoragePath(), "ARCoreTrackables", filename);
+        if (navigationEnhancer != null && filename.EndsWith(".json"))
+        {
+            navigationEnhancer.LoadEnhancedMap(Path.GetFileNameWithoutExtension(filename));
+            savedLocationPanel.SetActive(false);
+            return;
+        }
+
+        // Legacy loading method for CSV files
         ClearCurrentWaypoints();
         poseClassList.Clear();
 
