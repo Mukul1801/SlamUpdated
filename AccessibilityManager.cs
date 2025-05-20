@@ -3,10 +3,8 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
-using UnityEngine.Events;
-
-[System.Serializable]
-public class StringEvent : UnityEvent<string> { }
+using UnityEngine.XR.ARFoundation;
+using System;
 
 public class AccessibilityManager : MonoBehaviour
 {
@@ -15,6 +13,7 @@ public class AccessibilityManager : MonoBehaviour
     public NavigationManager navigationManager;
     public TextToSpeech textToSpeech;
     public Canvas accessibilityCanvas;
+    public NavigationEnhancer navigationEnhancer; // Changed from NavigationHelper to NavigationEnhancer
 
     [Header("Gesture Settings")]
     public bool enableGestureControls = true;
@@ -92,6 +91,10 @@ public class AccessibilityManager : MonoBehaviour
 
         if (audioSource == null)
             audioSource = gameObject.AddComponent<AudioSource>();
+            
+        // Find NavigationEnhancer
+        if (navigationEnhancer == null)
+            navigationEnhancer = FindObjectOfType<NavigationEnhancer>();
             
         // Initialize voice recognition if enabled
         if (enableVoiceCommands)
@@ -309,8 +312,15 @@ public class AccessibilityManager : MonoBehaviour
         }
         else
         {
-            // If not navigating, announce what's ahead
-            AnnounceWhatsAhead();
+            // If not navigating, announce what's ahead using NavigationEnhancer if available
+            if (navigationEnhancer != null)
+            {
+                navigationEnhancer.AnnounceWhatsAhead();
+            }
+            else
+            {
+                AnnounceWhatsAhead(); // Fallback to original implementation
+            }
         }
     }
 
@@ -424,7 +434,7 @@ public class AccessibilityManager : MonoBehaviour
     }
 
     // Menu operations
-    private void ToggleAccessibilityMenu()
+    public void ToggleAccessibilityMenu()
     {
         accessibilityMenuOpen = !accessibilityMenuOpen;
 
@@ -844,6 +854,14 @@ public class AccessibilityManager : MonoBehaviour
 
     public void AnnounceWhatsAhead()
     {
+        // Use NavigationEnhancer if available
+        if (navigationEnhancer != null)
+        {
+            navigationEnhancer.AnnounceWhatsAhead();
+            return;
+        }
+        
+        // Original implementation if NavigationEnhancer not available
         if (hitPointManager == null || Camera.main == null)
             return;
 
@@ -974,6 +992,14 @@ public class AccessibilityManager : MonoBehaviour
 
     public void AnnounceCurrentStatus()
     {
+        // Use NavigationEnhancer if available
+        if (navigationEnhancer != null)
+        {
+            navigationEnhancer.DescribePathQuality();
+            return;
+        }
+        
+        // Original implementation if NavigationEnhancer not available
         string status = "Current status: ";
 
         if (navigationManager != null && navigationManager.isNavigating)
@@ -1071,7 +1097,32 @@ public class AccessibilityManager : MonoBehaviour
         // Play acknowledgment sound
         PlaySound(confirmSound);
 
-        // Process command
+        // Process command - use NavigationEnhancer for enhanced handling if available
+        if (navigationEnhancer != null)
+        {
+            // Pass voice command to NavigationEnhancer for enhanced processing
+            // This would ideally call a method like navigationEnhancer.HandleVoiceCommand(command)
+            // but we'll handle common commands here
+
+            if (command.Contains("save") && command.Contains("map"))
+            {
+                navigationEnhancer.SaveEnhancedMap();
+                return;
+            }
+            else if (command.Contains("load") && command.Contains("map"))
+            {
+                SpeakMessage("Please select a map to load");
+                hitPointManager.PromptFilenameToLoad();
+                return;
+            }
+            else if (command.Contains("describe") && command.Contains("environment"))
+            {
+                navigationEnhancer.DescribeSurroundings();
+                return;
+            }
+        }
+
+        // Legacy command handling
         if (command.Contains("start") && command.Contains("navigation") || command.Contains("navigate"))
         {
             if (navigationManager != null && !navigationManager.isNavigating)
