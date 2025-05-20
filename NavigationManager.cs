@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
@@ -12,7 +12,7 @@ public class NavigationManager : MonoBehaviour
     public SafePathPlanner safePathPlanner;
     public AudioSource audioSource;
     public TextToSpeech textToSpeech;
-    public NavigationHelper navigationHelper;
+    public NavigationEnhancer navigationEnhancer; // Changed from NavigationHelper to NavigationEnhancer
 
     [Header("Audio Feedback")]
     public AudioClip waypointReachedSound;
@@ -104,17 +104,14 @@ public class NavigationManager : MonoBehaviour
         if (textToSpeech == null && FindObjectOfType<TextToSpeech>() == null)
             textToSpeech = gameObject.AddComponent<TextToSpeech>();
 
-        if (navigationHelper == null)
-            navigationHelper = FindObjectOfType<NavigationHelper>();
+        if (navigationEnhancer == null)
+            navigationEnhancer = FindObjectOfType<NavigationEnhancer>();
 
-        if (navigationHelper == null)
-            navigationHelper = gameObject.AddComponent<NavigationHelper>();
-
-        // Initialize navigation helper
-        if (navigationHelper != null)
+        // Initialize NavigationEnhancer reference if available
+        if (navigationEnhancer != null)
         {
-            navigationHelper.navigationManager = this;
-            navigationHelper.hitPointManager = hitPointManager;
+            navigationEnhancer.navigationManager = this;
+            navigationEnhancer.hitPointManager = hitPointManager;
         }
 
         // Set up 3D audio
@@ -187,12 +184,12 @@ public class NavigationManager : MonoBehaviour
                 }
             }
 
-            // Periodic environment descriptions
+            // Periodic environment descriptions - use NavigationEnhancer if available
             if (Time.time - lastEnvironmentAnnouncement > environmentAnnouncementInterval)
             {
-                if (navigationHelper != null)
+                if (navigationEnhancer != null)
                 {
-                    navigationHelper.DescribeSurroundings();
+                    navigationEnhancer.DescribeSurroundings();
                     lastEnvironmentAnnouncement = Time.time;
                 }
             }
@@ -207,6 +204,14 @@ public class NavigationManager : MonoBehaviour
 
     public void StartNavigation()
     {
+        // Use NavigationEnhancer if available and map is validated
+        if (navigationEnhancer != null && navigationEnhancer.IsMapValidForNavigation())
+        {
+            navigationEnhancer.StartEnhancedNavigation();
+            return;
+        }
+
+        // Regular navigation start
         if (hitPointManager.poseClassList.Count > 0)
         {
             // First check if we have at least start and end points
@@ -267,7 +272,7 @@ public class NavigationManager : MonoBehaviour
                 UpdateDebugText("Navigation active - follow audio cues.");
                 
                 // Provide path description
-                if (navigationHelper != null && useDetailedAudioDescriptions)
+                if (navigationEnhancer != null && useDetailedAudioDescriptions)
                 {
                     StartCoroutine(DelayedPathDescription(3.0f));
                 }
@@ -290,7 +295,12 @@ public class NavigationManager : MonoBehaviour
     private IEnumerator DelayedPathDescription(float delay)
     {
         yield return new WaitForSeconds(delay);
-        navigationHelper.DescribePathQuality();
+        
+        // Use NavigationEnhancer for path description if available
+        if (navigationEnhancer != null)
+        {
+            navigationEnhancer.DescribePathQuality();
+        }
     }
 
     public void StopNavigation()
@@ -501,6 +511,36 @@ public class NavigationManager : MonoBehaviour
 
     private void GiveDirectionToNextPathPoint(bool forceUpdate = false)
     {
+        // Use enhanced directions if NavigationEnhancer is available
+        if (navigationEnhancer != null && !forceUpdate)
+        {
+            Vector3 enhancedUserPos = Camera.main.transform.position;
+            Vector3 nextPoint = safePathPlanner.GetNextPathPoint();
+            
+            // Get user's forward direction
+            Vector3 enhancedUserFwd = Camera.main.transform.forward;
+            enhancedUserFwd.y = 0;
+            enhancedUserFwd.Normalize();
+            
+            // Get direction to next point
+            Vector3 directionToPoint = nextPoint - enhancedUserPos;
+            directionToPoint.y = 0;
+            
+            if (directionToPoint.magnitude > 0.1f)
+            {
+                directionToPoint.Normalize();
+                
+                // Calculate angle and distance
+                float enhancedAngle = Vector3.SignedAngle(enhancedUserFwd, directionToPoint, Vector3.up);
+                float enhancedDistance = Vector3.Distance(enhancedUserPos, nextPoint);
+                
+                // Use enhanced directions
+                navigationEnhancer.ProvideEnhancedDirections(enhancedUserPos, nextPoint, enhancedAngle, enhancedDistance);
+                return;
+            }
+        }
+
+        // Fall back to regular direction guidance
         Vector3 nextPathPoint = safePathPlanner.GetNextPathPoint();
         int currentPathIndex = safePathPlanner.GetCurrentPathIndex();
         bool isLastPoint = currentPathIndex >= safePathPlanner.GetPathCount() - 1;
@@ -855,5 +895,205 @@ public class NavigationManager : MonoBehaviour
             
             yield return new WaitForSeconds(0.2f);
         }
+    }
+
+    private void UpdateBeacon()
+    {
+        if (!isBeaconActive || beaconAudioSource == null)
+            return;
+            
+        // Adjust volume based on whether user is facing the right direction
+        if (safePathPlanner != null && safePathPlanner.GetPathCount() > safePathPlanner.GetCurrentPathIndex())
+        {
+            Vector3 nextPoint = safePathPlanner.GetNextPathPoint();
+            Vector3 userPos = Camera.main.transform.position;
+            
+            // Direction to next point
+            Vector3 directionToPoint = nextPoint - userPos;
+            directionToPoint.y = 0;
+            directionToPoint.Normalize();
+            
+            // User's forward direction
+            Vector3 userForward = Camera.main.transform.forward;
+            userForward.y = 0;
+            userForward.Normalize();
+            
+            // Calculate how well user is facing the next point
+            float facingDot = Vector3.Dot(userForward, directionToPoint);
+            
+            // Adjust volume - louder when facing the right direction
+            float targetVolume = Mathf.Lerp(beaconMinimumVolume, beaconMaximumVolume, (facingDot + 1) / 2);
+            beaconAudioSource.volume = Mathf.Lerp(beaconAudioSource.volume, targetVolume, Time.deltaTime * 2);
+        }
+    }
+
+    private void CheckDestinationReached(Vector3 userPosition)
+    {
+        // Find end point
+        PoseClass endPose = hitPointManager.poseClassList.FirstOrDefault(p => p.waypointType == WaypointType.EndPoint);
+        if (endPose == null && hitPointManager.poseClassList.Count > 0)
+        {
+            // Use last point if no explicit end point
+            endPose = hitPointManager.poseClassList[hitPointManager.poseClassList.Count - 1];
+        }
+
+        if (endPose != null)
+        {
+            float distanceToDestination = Vector3.Distance(
+                new Vector3(userPosition.x, 0, userPosition.z),
+                new Vector3(endPose.position.x, 0, endPose.position.z));
+
+            if (distanceToDestination < waypointReachedDistance)
+            {
+                // Reached destination
+                EndNavigation();
+            }
+        }
+    }
+
+    private void EndNavigation()
+    {
+        isNavigating = false;
+
+        // Stop beacon
+        StopBeacon();
+
+        // Play destination reached sound
+        PlaySound(destinationReachedSound);
+
+        // Vibrate device if enabled
+        if (useVibration)
+        {
+            if (hapticFeedbackMode == 2)
+            {
+                // Special completion pattern
+                VibratePattern(new float[] { 1.0f, 0.2f, 0, 0.1f, 1.0f, 0.2f, 0, 0.1f, 1.0f, 0.3f });
+            }
+            else
+            {
+                Vibrate(1.0f, 0.8f);
+            }
+        }
+
+        SpeakMessage("You have reached your destination safely. Navigation completed.");
+        UpdateDebugText("✅ Destination reached!");
+
+        // Reset variables
+        destinationAnnouncementStarted = false;
+    }
+
+    public void SpeakMessage(string message)
+    {
+        if (textToSpeech != null)
+        {
+            textToSpeech.Speak(message);
+            UpdateDebugText("🔊 " + message);
+        }
+        else
+        {
+            Debug.LogWarning("TextToSpeech component not found. Message: " + message);
+            UpdateDebugText("TTS not found: " + message);
+        }
+    }
+
+    private void PlaySound(AudioClip clip, float volume = 1.0f)
+    {
+        if (audioSource != null && clip != null)
+        {
+            audioSource.PlayOneShot(clip, volume);
+        }
+    }
+
+    private void Vibrate(float intensity = 1.0f, float duration = -1.0f)
+    {
+        if (duration < 0)
+            duration = vibrationDuration;
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+        if (intensity >= 1.0f)
+        {
+            Handheld.Vibrate();
+        }
+        else
+        {
+            // On Android, there's no direct way to control vibration intensity
+            // So we use a pattern of short vibrations to simulate lower intensity
+            long[] pattern = { 0, (long)(duration * 1000 * intensity) };
+            using (AndroidJavaClass unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+            {
+                using (AndroidJavaObject currentActivity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+                {
+                    using (AndroidJavaObject vibrator = currentActivity.Call<AndroidJavaObject>("getSystemService", "vibrator"))
+                    {
+                        vibrator.Call("vibrate", pattern, -1);
+                    }
+                }
+            }
+        }
+#endif
+    }
+
+    private void VibratePattern(float[] pattern)
+    {
+        if (pattern == null || pattern.Length < 2)
+            return;
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+        // Convert float pattern to long[] pattern expected by Android
+        // Pattern format: [delay1, duration1, delay2, duration2, ...]
+        long[] vibrationPattern = new long[pattern.Length];
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            vibrationPattern[i] = (long)(pattern[i] * 1000); // Convert to milliseconds
+        }
+
+        using (AndroidJavaClass unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+        {
+            using (AndroidJavaObject currentActivity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+            {
+                using (AndroidJavaObject vibrator = currentActivity.Call<AndroidJavaObject>("getSystemService", "vibrator"))
+                {
+                    vibrator.Call("vibrate", vibrationPattern, -1);
+                }
+            }
+        }
+#endif
+    }
+
+    private void UpdateDebugText(string text)
+    {
+        debugText = text;
+    }
+
+    // Method to provide next instruction on demand (for manual triggering)
+    public void ProvideNextInstruction()
+    {
+        if (isNavigating)
+        {
+            GiveDirectionToNextPathPoint(true);
+        }
+        else
+        {
+            // If not navigating but NavigationEnhancer is available, use it
+            if (navigationEnhancer != null)
+            {
+                navigationEnhancer.AnnounceWhatsAhead();
+            }
+            else
+            {
+                // Otherwise provide a basic message
+                SpeakMessage("Navigation is not active. Tap and hold to start navigation or double tap to access the menu.");
+            }
+        }
+    }
+
+    // Function to reset all navigation data
+    public void ResetNavigation()
+    {
+        StopNavigation();
+        destinationAnnouncementStarted = false;
+        spokenDirections.Clear();
+        lastDirectionUpdate = 0;
+        lastObstacleWarningTime = 0;
     }
 }
